@@ -10,6 +10,7 @@ import {
   getSettings,
   getTotalAllocatedForMonth,
 } from '@/database';
+import { getMemberExpectedForMonth, getMemberCarriedInForMonth } from './memberDuesService';
 
 export type PaymentStatus = 'Paid' | 'Partial' | 'Pending';
 
@@ -20,6 +21,7 @@ export interface MemberPaymentStatus {
   amountPaid: number;
   amountExpected: number;
   remaining: number;
+  carriedIn: number;
 }
 
 export interface MonthPaymentStatus {
@@ -34,24 +36,32 @@ export interface MonthPaymentStatus {
 
 /**
  * Calculate payment status for all members in a given month
+ *
+ * Uses member dues if available (when a month has been generated).
+ * Falls back to the default monthly_contribution if no dues row exists.
  */
 export async function getMonthPaymentStatus(month: string): Promise<MonthPaymentStatus> {
   const activeMembers = await getActiveMembers();
   const settings = await getSettings();
-  const perMemberAmount = settings.monthly_contribution;
 
   const members: MemberPaymentStatus[] = [];
   let collectedAmount = 0;
   let paidCount = 0;
   let partialCount = 0;
   let pendingCount = 0;
+  let expectedAmount = 0;
 
   for (const member of activeMembers) {
     const amountPaid = await getTotalAllocatedForMonth(member.id, month);
-    const remaining = Math.max(0, perMemberAmount - amountPaid);
+
+    // Get expected amount from dues if available, else use default
+    const amountExpected = await getMemberExpectedForMonth(member.id, month);
+    const carriedIn = await getMemberCarriedInForMonth(member.id, month);
+    const remaining = Math.max(0, amountExpected - amountPaid);
+
     let status: PaymentStatus = 'Pending';
 
-    if (amountPaid >= perMemberAmount) {
+    if (amountPaid >= amountExpected) {
       status = 'Paid';
       paidCount++;
     } else if (amountPaid > 0) {
@@ -62,19 +72,18 @@ export async function getMonthPaymentStatus(month: string): Promise<MonthPayment
     }
 
     collectedAmount += amountPaid;
+    expectedAmount += amountExpected;
 
     members.push({
       memberId: member.id,
       name: member.name,
       status,
       amountPaid,
-      amountExpected: perMemberAmount,
+      amountExpected,
       remaining,
+      carriedIn,
     });
   }
-
-  // expectedAmount is the total expected for the month: active members × monthly contribution
-  const expectedAmount = perMemberAmount * activeMembers.length;
 
   return {
     month,

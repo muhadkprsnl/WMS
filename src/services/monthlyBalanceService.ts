@@ -18,7 +18,9 @@ import {
   createMonthlyBalance,
   getMonthlyBalancesFrom,
   updateMonthlyBalance as updateMonthlyBalanceQuery,
+  getDatabase,
 } from '@/database';
+import { generateMemberDues } from './memberDuesService';
 
 export interface MonthlyCalculation {
   month: string;
@@ -251,5 +253,100 @@ export async function recalculateStoredBalancesFrom(startMonth: string): Promise
       console.error(`[MonthlyBalanceService] Failed to recalculate balance for ${storedBalance.month}:`, err);
       throw err;
     }
+  }
+}
+
+/**
+ * Generate and save monthly summary for a given month.
+ *
+ * Calculates opening + contributions - water = closing balance and stores it.
+ * Closing balance becomes the next month's opening balance (carry-forward).
+ *
+ * If the month is already generated, replaces the old row with new values (idempotent).
+ * All actions are logged for visibility (CLAUDE.md).
+ *
+ * @param month - Target month in YYYY-MM format
+ * @returns Summary data with replacement flag for visibility
+ * @throws If month format is invalid or database error occurs
+ */
+export interface GeneratedSummary {
+  summary: MonthlyCalculation;
+  replaced: boolean;
+  duesGenerated: number;
+  duesCarried: number;
+  duesSkipped: number;
+  duesLog: string[];
+}
+
+export async function generateMonthlySummary(month: string): Promise<GeneratedSummary> {
+  // Validate month format (YYYY-MM)
+  const monthRegex = /^\d{4}-\d{2}$/;
+  if (!monthRegex.test(month)) {
+    throw new Error(`Invalid month format: "${month}". Expected YYYY-MM (e.g., 2024-09).`);
+  }
+
+  const db = await getDatabase();
+
+  try {
+    // Calculate the monthly balance
+    const calculation = await calculateMonthlyBalance(month);
+
+    // Check if this month already has a stored balance (check-then-act pattern)
+    const existing = await getMonthlyBalance(month);
+    const replaced = !!existing;
+
+    let duesGenerated = 0;
+    let duesCarried = 0;
+    let duesSkipped = 0;
+    let duesLog: string[] = [];
+
+    // Execute within transaction (check-then-act per CLAUDE.md)
+    await db.withTransactionAsync(async () => {
+      // Update or create the balance row
+      if (replaced) {
+        await updateMonthlyBalanceQuery(
+          month,
+          calculation.openingBalance,
+          calculation.contributionsReceived,
+          calculation.waterExpenses,
+          calculation.closingBalance
+        );
+      } else {
+        await createMonthlyBalance(
+          month,
+          calculation.openingBalance,
+          calculation.contributionsReceived,
+          calculation.waterExpenses,
+          calculation.closingBalance
+        );
+      }
+
+      // Generate member dues within the same transaction
+      const duesResult = await generateMemberDues(month);
+      duesGenerated = duesResult.duesGenerated;
+      duesCarried = duesResult.duesCarried;
+      duesSkipped = duesResult.duesSkipped;
+      duesLog = duesResult.log;
+    });
+
+    // Log the balance summary
+    const opening = (calculation.openingBalance / 100).toFixed(2);
+    const contrib = (calculation.contributionsReceived / 100).toFixed(2);
+    const water = (calculation.waterExpenses / 100).toFixed(2);
+    const closing = (calculation.closingBalance / 100).toFixed(2);
+    const action = replaced ? 'Regenerated' : 'Generated';
+
+    console.log(
+      `[MonthlySummary] ${action} ${month}: ` +
+      `opening AED ${opening}, contributions AED ${contrib}, water AED ${water}, closing AED ${closing}`
+    );
+
+    // Log dues results
+    duesLog.forEach(logLine => console.log(logLine));
+
+    return { summary: calculation, replaced, duesGenerated, duesCarried, duesSkipped, duesLog };
+  } catch (err) {
+    console.error(`[MonthlySummary] Failed to generate summary for ${month}:`, err);
+    throw err;
   }
 }

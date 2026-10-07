@@ -8,13 +8,12 @@ import { MonthlyWaterBillCard } from '@/components/monthly-water-bill-card';
 import {
   getActiveMembers,
   getAllocationsByMonth,
-  getTotalWaterExpenseByMonth,
   getWaterPurchasesByMonth,
   getCollectorStats,
   getActiveCollectors,
   getAllTransactions,
 } from '@/database';
-import { calculateMonthlyBalance, getMonthlyWaterBill, type MonthlyWaterBill } from '@/services/monthlyBalanceService';
+import { getMonthlyWaterBill, generateMonthlySummary, hasMonthlyBalance, type MonthlyWaterBill } from '@/services/monthlyBalanceService';
 import { shareDashboardSummary } from '@/services/dashboardShareService';
 import { DesignSystem } from '@/constants/design-system';
 import { useColors } from '@/hooks/use-colors';
@@ -40,6 +39,8 @@ export default function HomeScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isSharing, setIsSharing] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [hasSummary, setHasSummary] = useState(false);
 
   // Month selector state for Water Bill card
   const [selectedMonth, setSelectedMonth] = useState<string>('');
@@ -51,7 +52,7 @@ export default function HomeScreen() {
   const currentMonth = new Date().toISOString().slice(0, 7);
 
   // Helper to shift month by delta (handles year boundaries)
-  const shiftMonth = (month: string, delta: number): string => {
+  const shiftMonth = useCallback((month: string, delta: number): string => {
     const [yearStr, monthStr] = month.split('-');
     let year = parseInt(yearStr, 10);
     let monthNum = parseInt(monthStr, 10) + delta;
@@ -66,7 +67,7 @@ export default function HomeScreen() {
     }
 
     return `${year}-${String(monthNum).padStart(2, '0')}`;
-  };
+  }, []);
 
   // Load water bill for the selected month
   const loadWaterBill = useCallback(async () => {
@@ -76,10 +77,12 @@ export default function HomeScreen() {
     try {
       setBillLoading(true);
       const waterBill = await getMonthlyWaterBill(monthToLoad);
+      const summaryExists = await hasMonthlyBalance(monthToLoad);
 
       // Discard stale responses
       if (requestId === requestIdRef.current) {
         setSelectedWaterBill(waterBill);
+        setHasSummary(summaryExists);
       }
     } catch (err) {
       console.error('Failed to load water bill:', err);
@@ -135,6 +138,39 @@ export default function HomeScreen() {
       setIsSharing(false);
     }
   }, [dashboardData, isSharing, billLoading, selectedWaterBill]);
+
+  const handleGenerateSummary = useCallback(async () => {
+    if (isGenerating || billLoading) return;
+
+    const monthToGenerate = selectedMonth || currentMonth;
+
+    try {
+      setIsGenerating(true);
+
+      const result = await generateMonthlySummary(monthToGenerate);
+      const closingBalance = (result.summary.closingBalance / 100).toFixed(2);
+      const nextMonth = shiftMonth(monthToGenerate, 1);
+
+      const action = result.replaced ? 'Regenerated' : 'Generated';
+      const balanceMessage = `Closing balance AED ${closingBalance} → ${nextMonth}'s opening`;
+      const duesMessage = `${result.duesGenerated} members (${result.duesCarried} carried, ${result.duesSkipped} skipped)`;
+      const fullMessage = `${action} ${monthToGenerate}\n\n${balanceMessage}\n\n${duesMessage}`;
+
+      Alert.alert('Success', fullMessage);
+
+      // Reload the water bill to show the saved summary
+      await loadWaterBill();
+      // Update the summary flag
+      const summaryExists = await hasMonthlyBalance(monthToGenerate);
+      setHasSummary(summaryExists);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to generate summary';
+      console.error('Generate summary error:', err);
+      Alert.alert('Error', message);
+    } finally {
+      setIsGenerating(false);
+    }
+  }, [selectedMonth, currentMonth, isGenerating, billLoading, loadWaterBill, shiftMonth]);
 
   const loadDashboardData = useCallback(async () => {
     try {
@@ -323,6 +359,17 @@ export default function HomeScreen() {
                 />
               </ViewShot>
             </Card>
+
+            {/* Generate Monthly Summary Button */}
+            <View style={{ marginBottom: DesignSystem.spacing.lg }}>
+              <PrimaryButton
+                onPress={handleGenerateSummary}
+                disabled={isGenerating || billLoading}
+                style={{ opacity: isGenerating || billLoading ? 0.6 : 1 }}
+              >
+                {isGenerating ? 'Generating...' : hasSummary ? 'Regenerate Summary' : 'Generate Summary'}
+              </PrimaryButton>
+            </View>
 
             {/* Contributions Card */}
             <Card style={{ marginBottom: DesignSystem.spacing.lg }}>

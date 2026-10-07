@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export const TABLES = {
   settings: `
@@ -139,6 +139,23 @@ export const TABLES = {
       UNIQUE (collector_id, month)
     );
   `,
+
+  member_dues: `
+    CREATE TABLE IF NOT EXISTS member_dues (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      member_id INTEGER NOT NULL,
+      month TEXT NOT NULL,
+      carried_in INTEGER NOT NULL DEFAULT 0,
+      expected INTEGER NOT NULL,
+      paid INTEGER NOT NULL DEFAULT 0,
+      remaining INTEGER NOT NULL DEFAULT 0,
+      generated_at TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (member_id) REFERENCES members(id),
+      UNIQUE (member_id, month)
+    );
+  `,
 };
 
 export const INDEXES = [
@@ -155,6 +172,8 @@ export const INDEXES = [
   'CREATE INDEX IF NOT EXISTS idx_handovers_handover_date ON handovers(handover_date);',
   'CREATE INDEX IF NOT EXISTS idx_collection_settlements_collector_id ON collection_settlements(collector_id);',
   'CREATE INDEX IF NOT EXISTS idx_collection_settlements_month ON collection_settlements(month);',
+  'CREATE INDEX IF NOT EXISTS idx_member_dues_member_id_month ON member_dues(member_id, month);',
+  'CREATE INDEX IF NOT EXISTS idx_member_dues_month ON member_dues(month);',
 ];
 
 export const DEFAULT_SETTINGS = {

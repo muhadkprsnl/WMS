@@ -109,3 +109,16 @@ export interface CollectionSettlement {
   notes?: string;
   created_at: string;
 }
+
+export interface MemberDue {
+  id: number;
+  member_id: number;
+  month: string; // YYYY-MM format
+  carried_in: number; // in fils, amount carried from previous month
+  expected: number; // in fils, default + carried_in
+  paid: number; // in fils, actual amount paid (from allocations)
+  remaining: number; // in fils, amount that will carry to next month
+  generated_at: string; // timestamp when the due was generated
+  created_at: string;
+  updated_at: string;
+}

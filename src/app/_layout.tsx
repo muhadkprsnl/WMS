@@ -1,5 +1,6 @@
 import { DarkTheme, DefaultTheme, ThemeProvider, Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
+import { StatusBar } from 'expo-status-bar';
 import { useColorScheme } from 'react-native';
 import { useEffect, useState } from 'react';
 
@@ -34,6 +35,7 @@ export default function RootLayout() {
   if (!databaseReady) {
     return (
       <ThemeProvider value={theme}>
+        <StatusBar style={colorScheme === 'dark' ? 'light' : 'dark'} />
         <AnimatedSplashOverlay />
       </ThemeProvider>
     );
@@ -41,6 +43,7 @@ export default function RootLayout() {
 
   return (
     <ThemeProvider value={theme}>
+      <StatusBar style={colorScheme === 'dark' ? 'light' : 'dark'} />
       <Stack screenOptions={{ headerShown: false }} />
     </ThemeProvider>
   );

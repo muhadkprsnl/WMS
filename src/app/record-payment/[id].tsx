@@ -5,6 +5,7 @@ import { Screen, Card, LoadingState, ErrorState, PrimaryButton, AppHeader } from
 import { PaymentForm, PaymentFormValues } from '@/components/forms/payment-form';
 import { getMemberById, getSettings } from '@/database';
 import { recordPayment } from '@/services/paymentAllocationService';
+import { getMemberExpectedForMonth } from '@/services/memberDuesService';
 import { DesignSystem } from '@/constants/design-system';
 import { useColors } from '@/hooks/use-colors';
 import { ThemedText } from '@/components/themed-text';
@@ -38,6 +39,7 @@ export default function RecordPaymentScreen() {
 
   const [member, setMember] = useState<Member | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [expectedAmount, setExpectedAmount] = useState<number>(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -56,13 +58,22 @@ export default function RecordPaymentScreen() {
         setMember(loaded);
         setSettings(appSettings);
         setError(null);
+
+        // Get the expected amount for the month (if available)
+        if (typeof month === 'string' && /^\d{4}-\d{2}$/.test(month)) {
+          const expected = await getMemberExpectedForMonth(memberId, month);
+          setExpectedAmount(expected);
+        } else {
+          // Fallback to the flat monthly contribution
+          setExpectedAmount(appSettings.monthly_contribution);
+        }
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load member');
     } finally {
       setLoading(false);
     }
-  }, [memberId]);
+  }, [memberId, month]);
 
   useFocusEffect(
     useCallback(() => {
@@ -145,7 +156,7 @@ export default function RecordPaymentScreen() {
                 memberId={member.id}
                 submitLabel="Record Payment"
                 initialValues={{
-                  amount: settings ? (settings.monthly_contribution / 100).toFixed(2) : '',
+                  amount: expectedAmount ? (expectedAmount / 100).toFixed(2) : '',
                   paymentDate: getDefaultPaymentDate(),
                 }}
               />

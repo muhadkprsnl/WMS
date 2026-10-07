@@ -10,6 +10,7 @@
 import { getPaymentById, createPaymentAllocation, getTotalAllocatedForMonth, createPayment as createPaymentQuery, updatePayment as updatePaymentQuery, deleteAllocationsByPayment, getAllocationMonthsByPayment, deletePaymentById } from '@/database/queries/payments';
 import { getSettings, getDatabase, getCollectorStats, getSettlement } from '@/database';
 import { recalculateStoredBalancesFrom } from './monthlyBalanceService';
+import { getMemberExpectedForMonth } from './memberDuesService';
 import { Payment } from '@/types/database';
 
 export interface AllocationRecord {
@@ -55,11 +56,13 @@ export async function allocatePayment(paymentId: number): Promise<AllocationReco
 
   for (let i = 0; i < maxMonths && remaining > 0; i++) {
     const alreadyAllocated = await getTotalAllocatedForMonth(payment.member_id, currentMonth);
-    const room = Math.max(0, monthlyContribution - alreadyAllocated);
+    // Use the expected amount from member dues (includes carry-over), not the flat default
+    const expectedAmount = await getMemberExpectedForMonth(payment.member_id, currentMonth);
+    const room = Math.max(0, expectedAmount - alreadyAllocated);
 
     if (room === 0) {
       // Month is full, move to next
-      console.log(`[PaymentAllocation] Payment ${paymentId}: month ${currentMonth} is full (allocated ${(alreadyAllocated / 100).toFixed(2)}), rolling to next`);
+      console.log(`[PaymentAllocation] Payment ${paymentId}: month ${currentMonth} is full (expected AED ${(expectedAmount / 100).toFixed(2)}, allocated AED ${(alreadyAllocated / 100).toFixed(2)}), rolling to next`);
       currentMonth = getNextMonth(currentMonth);
       continue;
     }

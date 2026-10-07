@@ -6,6 +6,7 @@ import {
   createPaymentAllocation,
   createWaterPurchase,
   getSettings,
+  getMonthlyBalance,
 } from '@/database';
 import { recordPayment } from '@/services/paymentAllocationService';
 import {
@@ -13,6 +14,7 @@ import {
   recordMonthlyBalance,
   hasMonthlyBalance,
   getCarryForwardBalance,
+  generateMonthlySummary,
 } from '@/services/monthlyBalanceService';
 
 describe('Monthly Balance Service', () => {
@@ -284,6 +286,94 @@ describe('Monthly Balance Service', () => {
       // Closing: 2700 + 6000 - 4000 = 4700
       expect(octBalance.openingBalance).toBe(2700);
       expect(octBalance.closingBalance).toBe(4700);
+    });
+  });
+
+  describe('Monthly Summary Generation', () => {
+    it('Should generate a monthly summary and carry closing balance to next month', async () => {
+      const member = await createMember('Alice');
+      await recordPayment(member.id, 1500, '2024-09-15', 'cash');
+      await createPaymentAllocation(1, '2024-09', 1500);
+      await createWaterPurchase('retail', 5, 800, '2024-09-10');
+
+      // Generate summary for September (opening 0, contributions 1500, water 4000, closing -2500)
+      const result = await generateMonthlySummary('2024-09');
+      expect(result.replaced).toBe(false);
+      expect(result.summary.closingBalance).toBe(-2500);
+
+      // October should open with September's closing balance (-2500)
+      const octBalance = await calculateMonthlyBalance('2024-10');
+      expect(octBalance.openingBalance).toBe(-2500);
+    });
+
+    it('Should carry negative closing balance to next month', async () => {
+      const member = await createMember('Bob');
+      await recordPayment(member.id, 500, '2024-08-15', 'cash');
+      await createPaymentAllocation(2, '2024-08', 500);
+      await createWaterPurchase('wholesale', 10, 1000, '2024-08-10');
+
+      // Generate summary for August (opening 0, contributions 500, water 10000, closing -9500)
+      const result = await generateMonthlySummary('2024-08');
+      expect(result.summary.closingBalance).toBe(-9500);
+
+      // September should open with August's closing balance (-9500)
+      const sepBalance = await calculateMonthlyBalance('2024-09');
+      expect(sepBalance.openingBalance).toBe(-9500);
+    });
+
+    it('Should replace existing summary when generating the same month twice', async () => {
+      const member = await createMember('Charlie');
+
+      // First generation
+      await recordPayment(member.id, 1000, '2024-07-15', 'cash');
+      await createPaymentAllocation(3, '2024-07', 1000);
+      await createWaterPurchase('retail', 5, 500, '2024-07-10');
+
+      const result1 = await generateMonthlySummary('2024-07');
+      expect(result1.replaced).toBe(false);
+      const closing1 = result1.summary.closingBalance;
+
+      // Second generation (after adding more data)
+      await recordPayment(member.id, 1000, '2024-07-20', 'cash');
+      await createPaymentAllocation(4, '2024-07', 1000);
+
+      const result2 = await generateMonthlySummary('2024-07');
+      expect(result2.replaced).toBe(true);
+      const closing2 = result2.summary.closingBalance;
+
+      // Second closing should be higher because of the extra payment
+      expect(closing2).toBeGreaterThan(closing1);
+
+      // Verify only one row exists for the month
+      const stored = await getMonthlyBalance('2024-07');
+      expect(stored).not.toBeNull();
+      expect(stored?.closing_balance).toBe(closing2);
+    });
+
+    it('Should reject invalid month format', async () => {
+      await expect(generateMonthlySummary('2024/09')).rejects.toThrow(/Invalid month format/);
+      await expect(generateMonthlySummary('09-2024')).rejects.toThrow(/Invalid month format/);
+      await expect(generateMonthlySummary('2024')).rejects.toThrow(/Invalid month format/);
+    });
+
+    it('Should generate earlier month and carry to later months', async () => {
+      const member = await createMember('Diana');
+
+      // Generate October first
+      await recordPayment(member.id, 2000, '2024-10-15', 'cash');
+      await createPaymentAllocation(5, '2024-10', 2000);
+      const octResult = await generateMonthlySummary('2024-10');
+      expect(octResult.summary.closingBalance).toBe(2000);
+
+      // Now generate September (earlier)
+      await recordPayment(member.id, 1000, '2024-09-15', 'cash');
+      await createPaymentAllocation(6, '2024-09', 1000);
+      const sepResult = await generateMonthlySummary('2024-09');
+      expect(sepResult.summary.closingBalance).toBe(1000);
+
+      // October's opening should now be September's closing (1000)
+      const octBalance = await calculateMonthlyBalance('2024-10');
+      expect(octBalance.openingBalance).toBe(1000);
     });
   });
 });

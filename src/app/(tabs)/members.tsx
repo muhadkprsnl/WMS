@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { View, FlatList, Pressable, Modal, useColorScheme } from 'react-native';
+import { View, FlatList, Pressable, Modal, useColorScheme, Alert } from 'react-native';
 import { useFocusEffect, router } from 'expo-router';
 import { Screen, AppHeader, Card, LoadingState, ErrorState, PrimaryButton, EmptyState } from '@/components/ui';
 import { ThemedText } from '@/components/themed-text';
@@ -7,13 +7,24 @@ import { getActiveMembers, getSettings } from '@/database';
 import { DesignSystem } from '@/constants/design-system';
 import { Member } from '@/types/database';
 import { getMonthPaymentStatus, type MonthPaymentStatus } from '@/services/memberPaymentStatusService';
+import { generateMonthlySummary, hasMonthlyBalance } from '@/services/monthlyBalanceService';
 
 type PaymentStatusFilter = 'all' | 'paid' | 'partially-paid' | 'pending';
 
 interface MemberWithPaymentStatus extends Member {
   paymentStatus: 'paid' | 'partially-paid' | 'pending';
   amount: number;
+  due: number; // Remaining amount due (carries to next month)
+  carriedIn: number; // Amount carried from previous month
 }
+
+/**
+ * Determines whether to show the "Record" button for a member.
+ * For fully paid members, show an arrow instead since there's nothing to record.
+ */
+export const shouldShowRecordButton = (status: 'paid' | 'partially-paid' | 'pending'): boolean => {
+  return status !== 'paid';
+};
 
 export default function MembersScreen() {
   const [members, setMembers] = useState<Member[]>([]);
@@ -22,6 +33,8 @@ export default function MembersScreen() {
   const [paymentStatus, setPaymentStatus] = useState<MonthPaymentStatus | null>(null);
   const [filterModalVisible, setFilterModalVisible] = useState(false);
   const [selectedFilter, setSelectedFilter] = useState<PaymentStatusFilter>('all');
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [hasSummary, setHasSummary] = useState(false);
 
   const currentMonth = new Date().toISOString().slice(0, 7);
   const [selectedMonth, setSelectedMonth] = useState(currentMonth);
@@ -117,6 +130,7 @@ export default function MembersScreen() {
 
         let paymentStatusType: 'paid' | 'partially-paid' | 'pending' = 'pending';
         let amount = 0;
+        let due = 0;
 
         if (memberPaymentStatus) {
           if (memberPaymentStatus.status === 'Paid') {
@@ -129,12 +143,15 @@ export default function MembersScreen() {
             paymentStatusType = 'pending';
             amount = memberPaymentStatus.amountPaid;
           }
+          due = memberPaymentStatus.remaining;
         }
 
         return {
           ...member,
           paymentStatus: paymentStatusType,
           amount,
+          due,
+          carriedIn: memberPaymentStatus?.carriedIn ?? 0,
         };
       })
       .filter((m) => {
@@ -163,6 +180,54 @@ export default function MembersScreen() {
       params: { id: member.id.toString() },
     });
   }, []);
+
+  const shiftMonth = useCallback((month: string, delta: number): string => {
+    const [yearStr, monthStr] = month.split('-');
+    let year = parseInt(yearStr, 10);
+    let monthNum = parseInt(monthStr, 10) + delta;
+
+    while (monthNum > 12) {
+      monthNum -= 12;
+      year += 1;
+    }
+    while (monthNum < 1) {
+      monthNum += 12;
+      year -= 1;
+    }
+
+    return `${year}-${String(monthNum).padStart(2, '0')}`;
+  }, []);
+
+  const handleGenerateSummary = useCallback(async () => {
+    if (isGenerating) return;
+
+    try {
+      setIsGenerating(true);
+
+      const result = await generateMonthlySummary(selectedMonth);
+      const closingBalance = (result.summary.closingBalance / 100).toFixed(2);
+      const nextMonth = shiftMonth(selectedMonth, 1);
+
+      const action = result.replaced ? 'Regenerated' : 'Generated';
+      const balanceMessage = `Closing balance AED ${closingBalance} → ${nextMonth}'s opening`;
+      const duesMessage = `${result.duesGenerated} members (${result.duesCarried} carried, ${result.duesSkipped} skipped)`;
+      const fullMessage = `${action} ${selectedMonth}\n\n${balanceMessage}\n\n${duesMessage}`;
+
+      Alert.alert('Success', fullMessage);
+
+      // Reload payment status to show dues
+      await loadPaymentStatus(selectedMonth);
+      // Update the summary flag
+      const summaryExists = await hasMonthlyBalance(selectedMonth);
+      setHasSummary(summaryExists);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to generate summary';
+      console.error('Generate summary error:', err);
+      Alert.alert('Error', message);
+    } finally {
+      setIsGenerating(false);
+    }
+  }, [selectedMonth, isGenerating, loadPaymentStatus, shiftMonth]);
 
   if (loading && members.length === 0) {
     return (
@@ -395,11 +460,21 @@ export default function MembersScreen() {
                 }}
               >
                 <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                  {/* Name and Payment Status - Tapable Area */}
+                  {/* Name and Due - Tapable Area */}
                   <View style={{ flex: 1, marginRight: DesignSystem.spacing.md }}>
                     <ThemedText type="titleSmall" numberOfLines={1}>
                       {member.name}
                     </ThemedText>
+                    {member.due > 0 && (
+                      <ThemedText
+                        type="bodySmall"
+                        themeColor="textSecondary"
+                        style={{ marginTop: DesignSystem.spacing.xs }}
+                      >
+                        Due AED {(member.due / 100).toFixed(2)}
+                        {member.carriedIn > 0 && ' (carried)'}
+                      </ThemedText>
+                    )}
                   </View>
 
                   {/* Payment Status */}
@@ -425,29 +500,54 @@ export default function MembersScreen() {
                     </ThemedText>
                   </View>
 
-                  {/* Record Button */}
-                  <Pressable
-                    onPress={() => handleRecordPayment(member)}
-                    style={({ pressed }) => ({
-                      paddingHorizontal: DesignSystem.spacing.md,
-                      paddingVertical: DesignSystem.spacing.sm,
-                      borderRadius: DesignSystem.spacing.sm,
-                      backgroundColor: pressed
-                        ? isDark ? '#1a472a' : '#c8e6c9'
-                        : isDark ? '#1b5e20' : '#e8f5e9',
-                      opacity: pressed ? 0.8 : 1,
-                    })}
-                  >
-                    <ThemedText
-                      type="bodySmall"
-                      style={{
-                        color: DesignSystem.colors.light.primary,
-                        fontWeight: '600'
-                      }}
+                  {/* Action Button: Record or Arrow */}
+                  {shouldShowRecordButton(member.paymentStatus) ? (
+                    // Record button for partial/pending members
+                    <Pressable
+                      onPress={() => handleRecordPayment(member)}
+                      style={({ pressed }) => ({
+                        paddingHorizontal: DesignSystem.spacing.md,
+                        paddingVertical: DesignSystem.spacing.sm,
+                        borderRadius: DesignSystem.spacing.sm,
+                        backgroundColor: pressed
+                          ? isDark ? '#1a472a' : '#c8e6c9'
+                          : isDark ? '#1b5e20' : '#e8f5e9',
+                        opacity: pressed ? 0.8 : 1,
+                      })}
                     >
-                      Record
-                    </ThemedText>
-                  </Pressable>
+                      <ThemedText
+                        type="bodySmall"
+                        style={{
+                          color: DesignSystem.colors.light.primary,
+                          fontWeight: '600'
+                        }}
+                      >
+                        Record
+                      </ThemedText>
+                    </Pressable>
+                  ) : (
+                    // Arrow button for paid members
+                    <Pressable
+                      onPress={() => handleViewMember(member)}
+                      accessibilityLabel="View member"
+                      style={({ pressed }) => ({
+                        paddingHorizontal: DesignSystem.spacing.md,
+                        paddingVertical: DesignSystem.spacing.sm,
+                        opacity: pressed ? 0.6 : 1,
+                      })}
+                    >
+                      <ThemedText
+                        type="bodySmall"
+                        style={{
+                          color: DesignSystem.colors.light.primary,
+                          fontWeight: '600',
+                          fontSize: 18,
+                        }}
+                      >
+                        ›
+                      </ThemedText>
+                    </Pressable>
+                  )}
                 </View>
               </Card>
               )}
@@ -458,6 +558,19 @@ export default function MembersScreen() {
         contentContainerStyle={{
           paddingBottom: DesignSystem.spacing.lg,
         }}
+        ListFooterComponent={
+          membersWithStatus.length > 0 ? (
+            <View style={{ paddingHorizontal: DesignSystem.spacing.md, paddingVertical: DesignSystem.spacing.lg }}>
+              <PrimaryButton
+                onPress={handleGenerateSummary}
+                disabled={isGenerating}
+                style={{ opacity: isGenerating ? 0.6 : 1 }}
+              >
+                {isGenerating ? 'Generating...' : hasSummary ? 'Regenerate Summary' : 'Generate Summary'}
+              </PrimaryButton>
+            </View>
+          ) : null
+        }
         ListEmptyComponent={
           error ? (
             <View style={{ paddingHorizontal: DesignSystem.spacing.md, paddingTop: DesignSystem.spacing.lg }}>

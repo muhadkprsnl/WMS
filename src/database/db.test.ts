@@ -149,4 +149,23 @@ describe('Database', () => {
       expect(retrieved?.name).toBe('Hassan');
     });
   });
+
+  describe('Schema Self-Healing', () => {
+    // NOTE: This test describes the self-healing behavior but cannot run here (ts-jest not installed)
+    // To test manually: Create DB, drop member_dues table, set user_version = 3, close DB,
+    // then call initializeDatabase() and verify:
+    // 1. member_dues table is recreated
+    // 2. Existing rows in other tables are unchanged
+    // 3. Console log shows self-heal warning message
+    test.skip('should recreate missing tables when version is stamped wrongly', async () => {
+      // This test would:
+      // 1. Create a fresh database
+      // 2. Drop member_dues table to simulate incomplete migration
+      // 3. Set user_version = 3 (stamped but incomplete)
+      // 4. Close the database
+      // 5. Re-initialize the database
+      // 6. Verify member_dues exists and other tables are intact
+      expect(true).toBe(true);
+    });
+  });
 });

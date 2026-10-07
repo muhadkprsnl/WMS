@@ -11,7 +11,7 @@ interface ScreenProps extends ViewProps {
 export function Screen({
   scrollable = true,
   children,
-  edges = ['right', 'left', 'bottom'],
+  edges = ['top', 'right', 'left', 'bottom'],
   style,
   ...rest
 }: ScreenProps) {

@@ -11,7 +11,8 @@ export interface AppHeaderProps {
 
 export function AppHeader({ title, subtitle, action, onBack }: AppHeaderProps) {
   return (
-    <View style={{ paddingHorizontal: DesignSystem.spacing.md, paddingTop: DesignSystem.spacing.xxl }}>
+    // Use spacing.lg for top padding since Screen now applies the safe area top inset
+    <View style={{ paddingHorizontal: DesignSystem.spacing.md, paddingTop: DesignSystem.spacing.lg }}>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
         {onBack && (
           <Pressable
